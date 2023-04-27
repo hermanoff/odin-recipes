@@ -1,0 +1,255 @@
+version: '3.8'
+
+services:
+  # The 'setup' service runs a one-off script which initializes users inside
+  # Elasticsearch — such as 'logstash_internal' and 'kibana_system' — with the
+  # values of the passwords defined in the '.env' file.
+  #
+  # This task is only performed during the *initial* startup of the stack. On all
+  # subsequent runs, the service simply returns immediately, without performing
+  # any modification to existing users.
+  setup:
+    image: nexus.neuronos.dev/setup:8.5.3
+    user: root
+    init: true
+    volumes:
+      - setup:/state:Z
+    #entrypoint: /bin/bash /entrypoint.sh
+    env_file:
+      - ../elastic1.env
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  elasticsearch:
+    image: nexus.neuronos.dev/elasticsearch:8.5.3
+    volumes:
+      - elasticsearch:/usr/share/elasticsearch/data:Z
+    labels:
+      - 'filebeat_enable=true'
+    environment:
+      node.name: elasticsearch
+      ES_JAVA_OPTS: -Xms8g -Xmx8g
+      # Bootstrap password.
+      # Used to initialize the keystore during the initial startup of
+      # Elasticsearch. Ignored on subsequent runs.
+      # Use single node discovery in order to disable production mode and avoid bootstrap checks.
+      # see: https://www.elastic.co/guide/en/elasticsearch/reference/current/bootstrap-checks.html
+      discovery.type: single-node
+    env_file:
+      - ../elastic1.env
+    networks:
+      - elk
+
+  logstash:
+    image: nexus.neuronos.dev/logstash:8.5.3
+    labels:
+      - 'filebeat_enable=true'
+    environment:
+      LS_JAVA_OPTS: -Xms1g -Xmx1g
+    env_file:
+      - ../elastic1.env
+    networks:
+      - elk
+    depends_on:
+      - elasticsearch
+
+  kibana:
+    image: nexus.neuronos.dev/kibana:8.5.3
+    deploy:
+      labels:
+        - 'traefik.enable=true'
+        - 'traefik.http.routers.kibana.entrypoints=web'
+        - 'traefik.http.routers.kibana.rule=Host(`l2v0n3q3f7j9.neuronos.dev`)'
+        - 'traefik.http.services.kibana.loadbalancer.server.port=5601'
+        - 'traefik.docker.network=web'
+    labels:
+      - 'filebeat_enable=true'
+    env_file:
+      - ../elastic1.env
+    networks:
+      - elk
+      - web
+    depends_on:
+      - elasticsearch
+
+  # fleet-server:
+  #   image: nexus.neuronos.dev/elastic-agent:8.5.3
+  #   volumes:
+  #     - fleet-server:/usr/share/elastic-agent/state:Z
+  #   environment:
+  #     FLEET_SERVER_ENABLE: '1'
+  #     FLEET_SERVER_INSECURE_HTTP: '1'
+  #     FLEET_SERVER_POLICY_ID: fleet-server-policy
+  #     # Fleet plugin in Kibana
+  #     KIBANA_FLEET_SETUP: '1'
+  #     # Enrollment.
+  #     # (a) Auto-enroll using basic authentication
+  #     #ELASTICSEARCH_USERNAME: elastic
+  #     # (b) Enroll using a pre-generated service token
+  #     #FLEET_SERVER_SERVICE_TOKEN: 'ZmI3YXBJVUJPUHVPNVl2QjBUdWQ6NkczU1g0blZTR21TQmlFRTFYeDdpZw=='
+  #   hostname: fleet-server
+  #   # Elastic Agent does not retry failed connections to Kibana upon the initial enrollment phase.
+  #   restart: on-failure
+  #   env_file:
+  #     - ../elastic.env
+  #   networks:
+  #     - elk
+  #     - web
+  #   depends_on:
+  #     - elasticsearch
+  #     - kibana
+
+  # apm-server:
+  #   image: nexus.neuronos.dev/elastic-agent:8.5.3
+  #   volumes:
+  #     - apm-server:/usr/share/elastic-agent/state:Z
+  #   environment:
+  #     FLEET_ENROLL: '1'
+  #     FLEET_TOKEN_POLICY_NAME: Agent Policy APM Server
+  #     FLEET_INSECURE: '1'
+  #     FLEET_URL: http://fleet-server:8220
+  #     # Enrollment.
+  #     # (a) Auto-enroll using basic authentication
+  #     #ELASTICSEARCH_USERNAME: elastic
+  #     # ELASTICSEARCH_PASSWORD: ${ELASTIC_PASSWORD:-}
+  #     # (b) Enroll using a pre-generated enrollment token
+  #     # FLEET_ENROLLMENT_TOKEN: 'Zjc3YXBJVUJPUHVPNVl2QjBUdWQ6ZkhGelJNUHZUS3VkR0ljQXRBMlhRUQ=='
+  #   hostname: apm-server
+  #   # Elastic Agent does not retry failed connections to Kibana upon the initial enrollment phase.
+  #   restart: on-failure
+  #   env_file:
+  #     - ../elastic.env
+  #   networks:
+  #     - elk
+  #     - web
+  #   depends_on:
+  #     - elasticsearch
+  #     - kibana
+  #     - fleet-server
+
+  filebeat:
+    image: nexus.neuronos.dev/filebeat:8.5.3
+    user: root
+    command: -e
+    volumes:
+      - /var/log:/var/log:ro,Z
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro,Z
+      - /var/run/docker.sock:/var/run/docker.sock:ro,Z
+      - filebeatdata:/usr/share/filebeat/data
+    deploy:
+      mode: global
+    env_file:
+      - ../elastic.env
+    networks:
+      - elk
+      - web
+    depends_on:
+      - elasticsearch
+      - logstash
+      - kibana
+
+  metricbeat:
+    image: nexus.neuronos.dev/metricbeat:8.5.3
+    # Run as 'root' instead of 'metricbeat' (uid 1000) to allow reading
+    # 'docker.sock' and the host's filesystem.
+    user: root
+    command:
+      # Log to stderr.
+      - -e
+      # Disable config file permissions checks. Allows mounting
+      # 'config/metricbeat.yml' even if it's not owned by root.
+      # see: https://www.elastic.co/guide/en/beats/libbeat/current/config-file-permissions.html
+      # - --strict.perms=false
+      # Mount point of the host’s filesystem. Required to monitor the host
+      # from within a container.
+      # - --system.hostfs=/hostfs
+    volumes:
+      - type: bind
+        source: /
+        target: /hostfs
+        read_only: true
+      - type: bind
+        source: /sys/fs/cgroup
+        target: /hostfs/sys/fs/cgroup
+        read_only: true
+      - type: bind
+        source: /proc
+        target: /hostfs/proc
+        read_only: true
+      - type: bind
+        source: /var/run/docker.sock
+        target: /var/run/docker.sock
+        read_only: true
+    deploy:
+      mode: global
+    env_file:
+      - ../elastic.env
+    networks:
+      - elk
+      - web
+    depends_on:
+      - elasticsearch
+
+  heartbeat:
+    image: nexus.neuronos.dev/heartbeat:8.5.3
+    user: root
+    command:
+      # Log to stderr.
+      - -e
+      # Disable config file permissions checks. Allows mounting
+      # 'config/heartbeat.yml' even if it's not owned by root.
+      # see: https://www.elastic.co/guide/en/beats/libbeat/current/config-file-permissions.html
+      # - --strict.perms=false
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro,Z
+    deploy:
+      mode: global
+    env_file:
+      - ../elastic.env
+    networks:
+      - elk
+      - web
+    depends_on:
+      - elasticsearch
+
+  enterprise-search:
+    image: nexus.neuronos.dev/enterprise-search:8.5.3
+    environment:
+      JAVA_OPTS: -Xms2g -Xmx2g
+      ENT_SEARCH_DEFAULT_PASSWORD: 'PDQ4pweG5X5BUzyF'
+    env_file:
+      - ../elastic.env
+    networks:
+      - elk
+      - web
+    depends_on:
+      - elasticsearch
+
+networks:
+  web:
+    external: true
+  elk:
+    external: true
+
+volumes:
+  setup:
+    driver: glusterfs
+    name: 'gv0/setup'
+
+  elasticsearch:
+    driver: glusterfs
+    name: 'gv0/elasticsearch'
+
+  # fleet-server:
+  #   driver: glusterfs
+  #   name: "gv0/fleet-server"
+
+  # apm-server:
+  #   driver: glusterfs
+  #   name: "gv0/apm-server"
+
+  filebeatdata:
+    driver: glusterfs
+    name: 'gv0/filebeatdata'
