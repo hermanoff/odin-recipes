@@ -1,0 +1,11 @@
+/* rule 1 */
+#subsection {
+  color: blue;
+  background-color: brown;
+}
+
+/* rule 2 */
+.main .list {
+  color: red;
+  background-color: aqua;
+}
