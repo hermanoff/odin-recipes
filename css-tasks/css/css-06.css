@@ -1,0 +1,23 @@
+.bold {
+  font-weight: bold;
+}
+.begin {
+  font-size: 24px;
+}
+.first {
+  background: green;
+  color: white;
+}
+.second {
+  background: white;
+  color: black;
+}
+div {
+  font-size: 20px;
+}
+div div {
+  font-size: 16px;
+}
+button {
+  font-size: 20px;
+}
