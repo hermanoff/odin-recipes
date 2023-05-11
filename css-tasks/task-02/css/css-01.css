@@ -1,0 +1,24 @@
+.first,
+.third {
+  padding: 32px;
+}
+.first {
+  margin: 12px;
+  background-color: lightpink;
+  margin-right: auto;
+  margin-left: auto;
+  width: 50%;
+}
+.second {
+  margin-bottom: 48px;
+  background-color: cadetblue;
+  width: 55%;
+  margin: auto;
+}
+.third {
+  background-color: bisque;
+  margin-left: 80%;
+}
+div {
+  border: 5px black;
+}
